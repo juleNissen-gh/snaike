@@ -1,3 +1,12 @@
+"""
+This module implements the game environment for a Snake-like game.
+
+It provides the core game logic, including the snake's movement,
+food spawning, and collision detection. The Environment class
+can be used to create and manage game instances, which can be
+used for both human play and AI training.
+"""
+
 import pygame as pg
 import numpy as np
 from random import randint
@@ -6,6 +15,14 @@ from typing import Union
 
 
 class Environment:
+    """
+    Represents the game environment for a Snake-like game.
+
+    This class manages the game state, including the snake's position,
+    food placement, and game boundaries. It provides methods for
+    moving the snake, detecting collisions, and updating the game state.
+    """
+
     # <editor-fold desc="Definitions... ">
     bounds = None
     clock = None
@@ -47,7 +64,14 @@ class Environment:
     # </editor-fold>
     @staticmethod
     def color_square(color: tuple[int, int, int], pos: np.ndarray) -> None:
-        """Color a specified square"""
+        """
+        Colors a specified square on the game board.
+
+        Args:
+            color (tuple[int, int, int]): RGB color tuple.
+            pos (np.ndarray): Position of the square to color.
+        """
+
         pg.draw.rect(Environment.window, color, pg.Rect(
             Environment.ROUTE_SIZE * pos[0] + Environment.BOARD_PADDING,
             Environment.ROUTE_SIZE * pos[1] + Environment.BOARD_PADDING,
@@ -55,7 +79,18 @@ class Environment:
 
     @classmethod
     def set_board_size(cls, *, zoom: int, board_size: int, truncated_matrix_size: int = 10) -> None:
-        """Adjust board size before instantiating a game."""
+        """
+        Adjusts the board size and related parameters before instantiating a game.
+
+        Args:
+            zoom (int): Zoom level for the game board.
+            board_size (int): Size of the game board (number of cells).
+            truncated_matrix_size (int, optional): Size of the truncated matrix. Defaults to 10.
+
+        Raises:
+            UserWarning: If the game is already initialized.
+        """
+
         if cls.pg_initialized:
             raise UserWarning('Game is already initialized, definitions will not have effect.')
 
@@ -67,8 +102,12 @@ class Environment:
         cls.BOARD_PADDING = (50 / 100) * cls.ROUTE_SIZE
 
     @classmethod
-    def init_pg(cls):
-        """init a pygame window, only for verbose games"""
+    def init_pg(cls) -> None:
+        """
+        Initializes the Pygame window for visual representation of the game.
+        This method should only be called for verbose games.
+        """
+
         cls.pg_initialized = True
         pg.init()
         cls.bounds = (cls.BOARD_SIZE * cls.ROUTE_SIZE + cls.BOARD_PADDING * 2,) * 2
@@ -77,6 +116,15 @@ class Environment:
         cls.clock = pg.time.Clock()
 
     def __init__(self, *, verbose: Union[bool, int], pos: tuple[int, int] = (0, 0), init_pg=True):
+        """
+        Initializes a new game environment.
+
+        Args:
+            verbose (Union[bool, int]): Determines the verbosity of the game output.
+            pos (tuple[int, int], optional): Initial position of the snake. Defaults to (0, 0).
+            init_pg (bool, optional): Whether to initialize Pygame. Defaults to True.
+        """
+
         if init_pg and not self.pg_initialized and verbose:
             self.init_pg()
         self.verbose = verbose
@@ -93,9 +141,20 @@ class Environment:
             pg.display.update()
 
     def step(self, action: int, cannon=True) -> tuple[float, np.ndarray, np.ndarray, bool]:
-        """Takes a step in a given direction.
-        When cannon is false, the game does not save the step,
-        but still returns the usual values."""
+        """
+        Advances the game state by one step based on the given action.
+
+        Args:
+            action (int): The action to take (0: left, 1: up, 2: right, 3: down).
+            cannon (bool, optional): Whether to save the step. Defaults to True.
+
+        Returns:
+            tuple: Contains (reward, next_state, next_b_matrix, is_playing).
+
+        Raises:
+            Exception: If the game has already ended.
+        """
+
         if not self.playing:
             raise Exception('Game has already ended')
 
@@ -161,9 +220,15 @@ class Environment:
 
     def step_all(self, action: int) -> tuple[np.ndarray, ...]:
         """
-        Get the results from 4 potential moves
-        returns: rewards, next states, and if the game is still playing
+        Simulates the results of all possible actions from the current state.
+
+        Args:
+            action (int): The action that will actually be taken.
+
+        Returns:
+            tuple: Contains (rewards, next_states, next_b_matrices, playing_status) for all actions.
         """
+
         rewards = np.zeros(4)
         playing = np.zeros(4)
         next_states = np.zeros((4, self.LEN_INPUTS))
@@ -175,13 +240,26 @@ class Environment:
         return rewards, next_states, next_b_matricies, playing
 
     def update_snake(self):
-        """Color in the front and back of the snake to advance. Will respect growth"""
+        """
+        Updates the visual representation of the snake on the game board.
+        This method respects the growth state of the snake.
+        """
+
         if not self.grow:
             self.color_square(Environment.BLACK, self.snake[0])
         self.color_square(Environment.SNAKE_COLOR, self.snake[-1])
 
     def spawn_food(self, cannon) -> Union[np.ndarray, None]:
-        """Selects a random tile to spawn food on."""
+        """
+        Spawns food at a random available position on the game board.
+
+        Args:
+            cannon (bool): Whether this is a real spawn (True) or a simulation (False).
+
+        Returns:
+            np.ndarray or None: The position of the spawned food, or None if no space is available.
+        """
+
         squares = (Environment.BOARD_SIZE ** 2) - 1 - np.size(self.snake, axis=0)  # finds amount of eligible tiles
         if squares < 0:
             return None
@@ -200,17 +278,39 @@ class Environment:
             self.color_square(self.FOOD_COLOR, self.food)
         return self.food
 
-    def snake_without_impossible_collisions(self):
+    def snake_without_impossible_collisions(self) -> np.ndarray:
+        """
+        Returns a subset of the snake's body that could potentially cause collisions.
+
+        This method optimizes collision detection by excluding parts of the snake
+        that are too far away to collide with the head in the next moves.
+
+        Returns:
+            np.ndarray: Array of snake body positions that could cause collisions.
+        """
+
         return self.snake[:-1][np.array([i >= np.sum(np.abs(self.snake[-1] - self.snake[i]))
                                          for i in range(len(self.snake) - 1)])]
 
     def get_state(self) -> tuple[np.ndarray, np.ndarray]:
+
         """
+        Retrieves the current state of the game.
+
+        The state includes information about food position, snake length,
+        obstacles, and borders relative to the snake's head in the following order:
+
         food is E, S, W, N
         dist food
         len snake
         obstacle dist E, S, W, N, SE, NE, SW, NW
         border is E, S, W, N
+
+        Returns:
+            tuple: Contains (state_vector, board_matrix).
+                state_vector (np.ndarray): A 1D array representing various game state features.
+                board_matrix (np.ndarray): A 2D matrix representing the game board state.
+
         """
         matrix_pad_width = self.TRUNCATED_MATRIX_SIZE // 2 + bool(self.TRUNCATED_MATRIX_SIZE % 2)
         if not self.playing:

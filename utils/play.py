@@ -1,3 +1,13 @@
+"""
+This module contains the play function, which is responsible for running the snake game
+simulation in a separate process. It interacts with the main training loop by receiving
+model updates and sending back experience data for training.
+
+The play function continuously runs game episodes, collects experience data, and
+communicates with the main process through multiprocessing queues. It also handles
+user input for controlling the visualization and debugging when running in verbose mode.
+"""
+
 import gc
 import logging
 import pygame as pg
@@ -12,8 +22,8 @@ from utils.model import Model, compute_q_values
 from utils.per import Staticmem
 
 
-def play(data_q,
-         model_q,
+def play(data_q: mp.Queue,
+         model_q: mp.Queue,
          model_params: tuple[int],
          verbose_args: dict,
          terminate_event: mp.Event,
@@ -21,16 +31,32 @@ def play(data_q,
          env_init_kwargs: dict,
          gamma: float = 0.95) -> None:
     """
-    plays a game and sends experience data (torch.Tensor(device=cpu)) back through the data_q
-    :param data_q: torch.multiprocessing.Manager().Queue() object to send experiences back to the main process
-    :param model_q: same type of queue to recieve model weight updates from the main process
-    :param model_params: tuple[int] will be passed as params to Model architechture
-    :param verbose_args: dict with variables about how to display the verbose window
-    :param terminate_event: manager.Event() to terminate the process
-    :param device: pt.device() device to keep the tensors on
-    :param env_init_kwargs: dict kwargs to set game board size
-    :param gamma: float used in calculate_q_values for debugging
+    Runs a continuous simulation of the snake game, collecting experience data and
+    sending it back to the main process for training.
+
+    This function initializes the game environment, sets up the neural network model,
+    and continuously plays episodes of the snake game. It receives model updates from
+    the main process and sends back collected experience data. When running in verbose
+    mode, it also handles user input for controlling the visualization and debugging.
+
+    Args:
+        data_q (mp.Queue): Queue for sending experience data back to the main process.
+        model_q (mp.Queue): Queue for receiving model weight updates from the main process.
+        model_params (tuple[int]): Parameters for initializing the Model architecture.
+        verbose_args (dict): Dictionary containing parameters for verbose mode operation.
+        terminate_event (mp.Event): Event to signal termination of the process.
+        device (pt.device): PyTorch device to use for tensor operations.
+        env_init_kwargs (dict): Keyword arguments for initializing the game environment.
+        gamma (float, optional): Discount factor used in Q-value calculations. Defaults to 0.95.
+
+    Returns:
+        None
+
+    Note:
+        This function runs in an infinite loop until the terminate_event is set.
+        It handles exceptions and ensures proper cleanup of CUDA resources before exiting.
     """
+
     device = pt.device(device)
     pt.set_default_device(device)
 
@@ -49,7 +75,7 @@ def play(data_q,
         while not terminate_event.is_set():
             n_steps = 0
 
-            try:
+            try:  # get updated model. use previous if timeout
                 policy_net_dict, epsilon = model_q.get(timeout=0.1, block=True)
             except queue.Empty:
                 if policy_net_dict is None:
@@ -61,6 +87,7 @@ def play(data_q,
                                pos=(random.randint(0, Environment.BOARD_SIZE - 3),
                                     random.randint(0, Environment.BOARD_SIZE - 1)))
 
+            # define return data tensors
             rv_states = pt.tensor([], dtype=pt.int8)
             rv_b_matricies = pt.tensor([], dtype=pt.bool)
             rv_next_states = pt.tensor([], dtype=pt.int8)
@@ -79,6 +106,7 @@ def play(data_q,
                     verbose_args['step'] = False
                     game.clock.tick(1.5 ** verbose_args['speed_mod'])
 
+                    # eventloop
                     for event in pg.event.get():
                         if event.type == pg.QUIT:
                             data_q.put((-1, 'end program'))

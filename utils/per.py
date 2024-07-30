@@ -1,3 +1,6 @@
+"""
+Prioritized experience replay memory class and Staticmem namedtuple
+"""
 from collections import namedtuple
 import torch as pt
 import numpy as np
@@ -6,7 +9,15 @@ import numpy as np
 Staticmem = namedtuple('Staticmem',
                        ('states', 'b_matricies', 'next_states', 'next_b_matricies', 'rewards', 'playing', 'weights'))
 
+
 class PrioritizedReplayMemory:
+    """
+    A class implementing Prioritized Experience Replay (PER) memory.
+
+    This memory stores experiences and samples them based on their priority,
+    allowing more important experiences to be sampled more frequently.
+    """
+
     def __init__(self,
                  mem_len: int,
                  input_len: int,
@@ -16,6 +27,19 @@ class PrioritizedReplayMemory:
                  beta_increment: float = 0.0003,
                  beta_end: float = 1,
                  device: pt.device = pt.device('cpu')):
+        """
+        Initialize the PrioritizedReplayMemory.
+
+        Args:
+            mem_len (int): The maximum number of experiences to store.
+            input_len (int): The length of the input state vector.
+            truncated_matrix_size (int): The size of the truncated board matrix.
+            alpha (float): The exponent determining how much prioritization is used. Defaults to 0.6.
+            beta (float): The initial value of beta for importance sampling. Defaults to 0.4.
+            beta_increment (float): The increment of beta per sampling. Defaults to 0.0003.
+            beta_end (float): The final value of beta. Defaults to 1.
+            device (torch.device): The device to store the tensors on. Defaults to CPU.
+        """
         self.device = device
         self.capacity = mem_len
         self.num_blanc_values = mem_len
@@ -38,6 +62,15 @@ class PrioritizedReplayMemory:
         self.priorities = pt.ones(mem_len, dtype=pt.float32)
 
     def push(self, batch: Staticmem):
+        """
+        Add a batch of experiences to the memory.
+
+        Args:
+            batch (Staticmem): A named tuple containing a batch of experiences.
+
+        Returns:
+            PrioritizedReplayMemory: The updated memory object.
+        """
         length = batch.states.shape[0]
         self.num_blanc_values = max(0, self.num_blanc_values - length)
 
@@ -67,7 +100,17 @@ class PrioritizedReplayMemory:
 
         return self
 
-    def sample(self, batch_size):
+    def sample(self, batch_size: int) -> tuple[Staticmem, np.ndarray]:
+        """
+        Sample a batch of experiences from the memory.
+
+        Args:
+            batch_size (int): The number of experiences to sample.
+
+        Returns:
+            - batch (Staticmem): A named tuple of sampled experiences.
+            - indices (numpy.ndarray): The indices of the sampled experiences.
+        """
         # get the probabilies for sampling
         probabilities: np.ndarray = \
             (self.priorities.cpu().numpy() ** self.alpha)[:(vals := self.capacity - self.num_blanc_values)]
@@ -92,13 +135,27 @@ class PrioritizedReplayMemory:
 
         return batch, indices
 
-    def update_priorities(self, indices, td_errors):
+    def update_priorities(self, indices: np.ndarray, td_errors: pt.Tensor) -> None:
+        """
+        Update the priorities of the sampled experiences.
+
+        Args:
+            indices (numpy.ndarray): The indices of the experiences to update.
+            td_errors (torch.Tensor): The TD errors of the sampled experiences.
+        """
         priorities = (td_errors.abs() + 1e-5).pow(self.alpha)
         self.priorities[indices] = priorities
         self.weights[indices] = priorities.pow(-self.beta)
         self.weights /= self.weights.max()
 
-    def __iter__(self):
+    def __iter__(self) -> pt.Tensor:
+        """
+        Iterate over the memory attributes.
+
+        Yields:
+            torch.Tensor: The memory attributes in the order: states, b_matricies, next_states,
+                          next_b_matricies, rewards, playing, weights.
+        """
         yield self.states.float()
         yield self.b_matricies
         yield self.next_states.float()

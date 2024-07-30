@@ -1,3 +1,32 @@
+"""
+Snake AI Training Module
+
+This module implements a reinforcement learning approach to train an AI agent to play the game of Snake.
+It uses a deep Q-network (DQN) with prioritized experience replay and multi-processing for parallel experience sampling.
+
+The main components of this module include:
+1. Environment setup for the Snake game
+2. Neural network model definition
+3. Training loop with experience replay
+4. Multi-processing for parallel experience sampling
+5. Visualization of training progress
+
+Usage:
+Run this script directly to start the training process. Use command-line argument '--profile'
+for profiling the performance.
+
+Dependencies:
+- PyTorch
+- Pygame
+- NumPy
+- Cloudpickle
+- Psutil
+- Colorama
+
+Author: Philip Nissen-Lie Trøen
+Date: 30/7/24
+"""
+
 import cProfile
 import cloudpickle
 import colorama
@@ -86,7 +115,19 @@ CLR = "\x1B[0K"
 
 # </editor-fold>
 
-def terminate_process(pid, process, terminate_event):
+def terminate_process(pid: int, process: mp.Process, terminate_event: mp.Event) -> None:
+    """
+    Safely terminate a given process.
+
+    Args:
+        pid (int): Process ID
+        process (multiprocessing.Process): Process object to terminate
+        terminate_event (multiprocessing.Event): Event to signal termination
+
+    This function attempts to terminate the process gracefully, and if unsuccessful,
+    forcibly terminates it.
+    """
+
     terminate_event.set()
     process.join(timeout=None)
     if process.is_alive():
@@ -96,12 +137,27 @@ def terminate_process(pid, process, terminate_event):
             os.kill(pid, signal.SIGKILL)
 
 
-def set_high_priority() -> None:  # setting this priority for consistency
-    """Set the process priority to high (Windows only)."""
-    psutil.Process(os.getpid()).nice(psutil.ABOVE_NORMAL_PRIORITY_CLASS)
+def set_high_priority() -> None:
+    """
+    Set the current process priority to high (Windows only).
+
+    This function is used to ensure consistent performance during training.
+    """
+
+    psutil.Process(os.getpid()).nice(psutil.HIGH_PRIORITY_CLASS)
 
 
 def fill_queue(model: nn.Module, queue: Queue) -> None:
+    """
+    Fill the given queue with the model's state dict and current epsilon value.
+
+    Args:
+        model (nn.Module): The neural network model
+        queue (multiprocessing.Queue): Queue to fill with model data
+
+    This function is used to update the model state in child processes.
+    """
+
     model.cpu()
     while not queue.full():
         queue.put((model.state_dict(), epsilon))
@@ -110,9 +166,24 @@ def fill_queue(model: nn.Module, queue: Queue) -> None:
 
 def main() -> None:
     """
-    trainingloop and main process.
-    :return: None
+    Main training loop for the Snake AI.
+
+    This function sets up the training environment, initializes the neural network models,
+    manages the multi-processing for parallel experience sampling, and runs the main training loop.
+    It also handles user interactions for saving models, adding/removing processes, and
+    visualizing training progress.
+
+    The training process involves:
+    1. Collecting gameplay experiences from multiple processes
+    2. Updating the replay memory with new experiences
+    3. Periodically training the neural network on batches from the replay memory
+    4. Updating the networks
+    5. Adjusting the exploration rate (epsilon)
+    6. Visualizing training metrics
+
+    The function runs indefinitely until manually stopped or an 'end program' signal is received.
     """
+
     global epsilon
 
     manager = mp.Manager()
@@ -124,6 +195,32 @@ def main() -> None:
     process_dict = {}
 
     def spawn_process(verbose_args: dict, is_verbose: bool = False) -> int:
+
+        """
+        Spawn a new process for parallel gameplay and data collection.
+
+        Args:
+            verbose_args (dict): A dictionary containing arguments for the gameplay process,
+                                 including settings for visualization and debugging.
+            is_verbose (bool, optional): Flag to indicate if this is a verbose process
+                                         (i.e., with visualization). Defaults to False.
+
+        Returns:
+            int: The process ID (pid) of the spawned process.
+
+        This function creates a new process that runs the 'play' function, which simulates
+        gameplay and collects experience data. It uses cloudpickle to serialize the 'play'
+        function, allowing it to be run in a separate process.
+
+        The spawned process is added to the process_dict for management and potential
+        termination later. If the process is marked as verbose, it will run with visualization
+        enabled for debugging and observation purposes.
+
+        Raises:
+            Exception: If there's an error in spawning the process, it prints the error
+                       and traceback, then re-raises the exception.
+        """
+
         try:
             terminate_event = manager.Event()
 

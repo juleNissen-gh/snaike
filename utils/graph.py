@@ -1,23 +1,58 @@
+"""
+Defines the Graph class for visualizing training progress.
+"""
+
 import matplotlib.pyplot as plt
 import numpy as np
 from functools import lru_cache
 
 
 class Graph:
+    """
+    A class for creating and updating a live plot of training metrics.
+
+    This class manages a matplotlib figure with two y-axes: one for loss values
+    and another for scores. It provides methods to update the plot with new data
+    and to terminate the plot when it's no longer needed.
+    """
+
     @staticmethod
-    def terminate():
+    def terminate() -> None:
+        """
+        Terminates all open matplotlib plots.
+
+        This method should be called when the visualization is no longer needed
+        to free up resources.
+        """
         plt.close('all')
 
     @staticmethod
     @lru_cache(maxsize=2)
-    def gaussian_weights(n: int, standard_deviation: int):
+    def gaussian_weights(n: int, standard_deviation: float):
+        """
+        Calculates Gaussian weights for smoothing data.
+
+        Args:
+            n (int): The number of weights to generate.
+            standard_deviation (float): The standard deviation of the Gaussian distribution.
+
+        Returns:
+            numpy.ndarray: An array of Gaussian weights normalized to sum to 1.
+        """
         x = np.arange(n)
         weights = np.exp(-((x - (n - 1) / 2) ** 2) / (2 * standard_deviation ** 2))
         weights /= np.sum(weights)
         return weights
 
-    # Init graph
-    def __init__(self, update_freq: int, score_avg_weight_sd):
+    def __init__(self, update_freq: int, score_avg_weight_sd: float) -> None:
+        """
+        Initializes the Graph object.
+
+        Args:
+            update_freq (int): The frequency at which the plot will be updated.
+            score_avg_weight_sd (float): The standard deviation for the Gaussian weights
+                                         used in score averaging.
+        """
         self.score_avg_weight_sd = score_avg_weight_sd
         self.update_freq = update_freq
         self.loss_values: np.ndarray = np.array([], dtype=np.float16)
@@ -46,7 +81,19 @@ class Graph:
         self.xlim = -5
         self.score_ylim = 4
 
-    def update_plot(self, loss_value: float, avg_loss: np.ndarray, score: np.ndarray):  # Append the new values to plot
+    def update_plot(self, loss_value: float, avg_loss: np.ndarray, score: np.ndarray):
+        """
+        Updates the plot with new data points.
+
+        This method adds new loss and score data to the plot, updates the axes limits,
+        and redraws the plot. It also handles downsampling of data to maintain performance
+        over long training runs.
+
+        Args:
+            loss_value (float): The current loss value to be added to the plot.
+            avg_loss (np.ndarray): An array of recent loss values for computing the average.
+            score (np.ndarray): An array of recent scores for computing the weighted average.
+        """
         avg_loss_value = float(np.mean(avg_loss))
         self.loss_values = np.append(self.loss_values, loss_value)
         self.avg_loss_values = np.append(self.avg_loss_values, np.mean(avg_loss))
@@ -91,7 +138,7 @@ class Graph:
             self.score_x_values = self.score_x_values[indices]
 
             # reset the lim to avoid early high values
-            self.ylim = (self.ylim[0], np.max(self.avg_loss_values[self.slice_freq // 100:] + 5))
+            self.ylim = (self.ylim[0], np.max(self.avg_loss_values[self.slice_freq // 50:] + 5))
 
         self.episode += self.update_freq
 
