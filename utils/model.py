@@ -1,6 +1,7 @@
 """
 Defines a Model class and functions for optimizing it.
 """
+
 import numpy as np
 import random
 import torch as pt

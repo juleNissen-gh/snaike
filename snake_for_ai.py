@@ -62,9 +62,9 @@ warnings.filterwarnings("ignore", category=UserWarning, module="torch.distribute
 # BATCH_SIZE is the number of transitions sampled from the replay buffer
 TAU = 0.03
 epsilon = 1
-EPS_END = 0.01
-EPS_DECAY = 0.9995
-LR = 6e-4
+EPS_END = 0
+EPS_DECAY = 0.999
+LR = 4e-4
 NUM_MEMORY_ITEMS = 50_000
 BATCH_SIZE = 3000
 UPDATE_FREQUENCY = 2
@@ -78,7 +78,7 @@ PER_KWARGS = {
     'mem_len': NUM_MEMORY_ITEMS,
     'input_len': Environment.LEN_INPUTS,
     'truncated_matrix_size': Environment.TRUNCATED_MATRIX_SIZE,
-    'alpha': 0.7,
+    'alpha': 0.75,
     'beta': 0.4,
     'beta_increment': 0.00010,
     'beta_end': 0.8,
