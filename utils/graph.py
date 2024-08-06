@@ -65,7 +65,8 @@ class Graph:
         self.n_sliced = 1
         self.slice_freq = 1200
 
-        self.fig, self.ax1 = plt.subplots()
+        self.plt = plt
+        self.fig, self.ax1 = self.plt.subplots()
         self.loss_line, = self.ax1.plot([], [], label='Loss', linewidth=0.5)
         self.avg_loss_line, = self.ax1.plot([], [], label='Average Loss')
 
@@ -115,7 +116,7 @@ class Graph:
 
         # Adjust the plot limits
         self.xlim += self.update_freq
-        plt.xlim(0, max(1, self.xlim))
+        self.plt.xlim(0, max(1, self.xlim))
         self.ylim = (min(self.ylim[0], loss_value, avg_loss_value),
                      max(self.ylim[1], loss_value, avg_loss_value))
         self.ax1.set_ylim(self.ylim[0] - 1, self.ylim[1] + 1)
@@ -143,4 +144,4 @@ class Graph:
         self.episode += self.update_freq
 
         # plt.pause() to update
-        plt.pause(0.0001)
+        self.plt.pause(0.01)

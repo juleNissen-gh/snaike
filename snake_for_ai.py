@@ -241,7 +241,7 @@ def main() -> None:
     # <editor-fold desc="vars...">
     plot = Graph(UPDATE_FREQUENCY, SCORE_WEIGHT_SD)
     set_high_priority()
-    model_params = (Environment.LEN_INPUTS, 50, 4, TRUNCATED_MATRIX_SIZE, CONV2_TRUNCATED_MATRIX_SIZE)
+    model_params = (Environment.LEN_INPUTS, 60, 4, TRUNCATED_MATRIX_SIZE, CONV2_TRUNCATED_MATRIX_SIZE)
     average_loss = np.array([])
     scores = np.array([], dtype=np.uint8)
     policy_net = Model(*model_params).float()
@@ -342,6 +342,7 @@ Beta: {replay_memory.beta:>11.3f}{CLR}""")
             plot.update_plot(loss, average_loss, scores)
 
         episode += 1
+        plot.plt.pause(0.01)
 
 
 if __name__ == '__main__':
