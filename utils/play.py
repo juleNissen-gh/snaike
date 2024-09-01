@@ -140,7 +140,8 @@ def play(data_q: mp.Queue,
                 state = pt.from_numpy(state).to(device=device, dtype=pt.float)
 
                 # check for the agent looping within the previous 30 steps
-                if t := (len(game.snake), game.snake[-1]) in prev_states:
+                t = (len(game.snake), list(game.snake[-1]))
+                if t in prev_states:
                     break
                 prev_states.append(t)
                 if len(prev_states) >= 30:

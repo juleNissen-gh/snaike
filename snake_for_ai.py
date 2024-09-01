@@ -63,11 +63,11 @@ warnings.filterwarnings("ignore", category=UserWarning, module="torch.distribute
 TAU = 0.03
 epsilon = 1
 EPS_END = 0
-EPS_DECAY = 0.999
+EPS_DECAY = 0.997
 LR = 4e-4
-NUM_MEMORY_ITEMS = 50_000
-BATCH_SIZE = 3000
-UPDATE_FREQUENCY = 2
+NUM_MEMORY_ITEMS = 30_000
+BATCH_SIZE = 2000
+UPDATE_FREQUENCY = 1
 BG_PROCESSES = 1
 
 TRUNCATED_MATRIX_SIZE = 15
@@ -80,8 +80,8 @@ PER_KWARGS = {
     'truncated_matrix_size': Environment.TRUNCATED_MATRIX_SIZE,
     'alpha': 0.75,
     'beta': 0.4,
-    'beta_increment': 0.00010,
-    'beta_end': 0.8,
+    'beta_increment': 0.0001,
+    'beta_end': 0.7,
     'device': device
 }
 
@@ -93,11 +93,12 @@ BOARD_SIZE = 15
 ZOOM = 40
 
 GAMMA = 0.94
-Environment.LIVING_PENALTY = -0.4
-Environment.FOOD_REWARD = 30
+Environment.LIVING_PENALTY = -0.2
+Environment.FOOD_REWARD =15
 Environment.DEATH_PENALTY = -10
 Environment.WRONG_TURN_PENALTY = Environment.DEATH_PENALTY
-Environment.BORDER_PENALTY = -0.5
+Environment.BORDER_PENALTY = -0.25
+
 
 speed_mod = 3
 paused = False
@@ -246,6 +247,7 @@ def main() -> None:
     scores = np.array([], dtype=np.uint8)
     policy_net = Model(*model_params).float()
     target_net = Model(*model_params).to(device=device)
+    grok_grads = None
 
     # state_dict = pt.load('models\\modell88.pt')
     # epsilon = EPS_END
@@ -322,8 +324,9 @@ def main() -> None:
         if episode % UPDATE_FREQUENCY == 0:  # update every UPDATE_FREQ game
             fill_queue(policy_net, model_q)  # update simulators' models (and epsilon)
 
-            loss = optimize(policy_net=policy_net, target_net=target_net, memory=replay_memory,
-                            criterion=criterion, optimizer=optimizer, batch_size=BATCH_SIZE, gamma=GAMMA, tau=TAU)
+            loss, grok_grads = optimize(policy_net=policy_net, target_net=target_net, memory=replay_memory,
+                                        criterion=criterion, optimizer=optimizer, batch_size=BATCH_SIZE,
+                                        gamma=GAMMA, tau=TAU, grok_grads=grok_grads)
 
             average_loss = np.append(average_loss, loss)
 
@@ -342,7 +345,7 @@ Beta: {replay_memory.beta:>11.3f}{CLR}""")
             plot.update_plot(loss, average_loss, scores)
 
         episode += 1
-        plot.plt.pause(0.01)
+        plot.event_loop()
 
 
 if __name__ == '__main__':

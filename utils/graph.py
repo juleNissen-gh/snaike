@@ -5,6 +5,7 @@ Defines the Graph class for visualizing training progress.
 import matplotlib.pyplot as plt
 import numpy as np
 from functools import lru_cache
+import random
 
 
 class Graph:
@@ -44,6 +45,30 @@ class Graph:
         weights /= np.sum(weights)
         return weights
 
+    @staticmethod
+    def linspace_float(*args, **kwargs) -> np.ndarray:
+        """
+        np.linspace wrapper that supports num to be passed as float.
+        The decimals are converted to a probability of rounding up.
+
+        :param args: Args to be passed to np.linspace()
+        :param kwargs: Kwargs to be passed to np.linspace()
+        :return: value from np.linspace()
+        """
+        # Handle num as positional argument
+        if len(args) >= 3:
+            start, stop, num, *rest = args
+            num = int(num) + ((num % 1) > random.random())
+            args = (start, stop, num) + tuple(rest)
+
+        # Handle num as keyword argument
+        elif 'num' in kwargs:
+            num = kwargs['num']
+            kwargs['num'] = int(num) + ((num % 1) > random.random())
+
+        # Call np.linspace with modified arguments
+        return np.linspace(*args, **kwargs)
+
     def __init__(self, update_freq: int, score_avg_weight_sd: float) -> None:
         """
         Initializes the Graph object.
@@ -62,11 +87,11 @@ class Graph:
         self.scores: np.ndarray = np.array([], dtype=np.float16)
         self.score_x_values: np.ndarray = np.array([], dtype=np.uint32)
         self.episode = 0
-        self.n_sliced = 1
-        self.slice_freq = 1200
+        self.n_reduced = 1
+        self.reduc_freq = 2000
 
-        self.plt = plt
-        self.fig, self.ax1 = self.plt.subplots()
+        self.fig, self.ax1 = plt.subplots()
+        self.ax1.set_yscale('log')
         self.loss_line, = self.ax1.plot([], [], label='Loss', linewidth=0.5)
         self.avg_loss_line, = self.ax1.plot([], [], label='Average Loss')
 
@@ -116,32 +141,41 @@ class Graph:
 
         # Adjust the plot limits
         self.xlim += self.update_freq
-        self.plt.xlim(0, max(1, self.xlim))
+        plt.xlim(0, max(1, self.xlim))
         self.ylim = (min(self.ylim[0], loss_value, avg_loss_value),
                      max(self.ylim[1], loss_value, avg_loss_value))
-        self.ax1.set_ylim(self.ylim[0] - 1, self.ylim[1] + 1)
+        self.ax1.set_ylim(self.ylim[0]/2, self.ylim[1] + 1)
         self.score_ylim = max(self.score_ylim, self.scores[-1].item())  # Update the score y-limit
-        self.ax2.set_ylim(3, self.score_ylim + 1)  # Set the y-limits for the score axis
+        self.ax2.set_ylim(2.9, self.score_ylim + 1)  # Set the y-limits for the score axis
 
-        if len(self.loss_values) >= self.slice_freq:  # decrease resolution to conserve memory
-            self.n_sliced += 1
+        if len(self.loss_values) >= self.reduc_freq:  # decrease resolution to conserve memory
+            self.n_reduced += 1
             # decrease by 1/n_sliced and 1-1/n_sliced to half and conserve even resolution
             indices = np.append(
-                np.linspace(0, self.slice_freq // 2, int(self.slice_freq / 2 * (1 - 1 / self.n_sliced)), dtype=int),
-                np.linspace(self.slice_freq // 2, self.slice_freq - 1, int(self.slice_freq / 2 * (1 / self.n_sliced)),
-                            dtype=int)
+                np.mod(self.linspace_float(0, self.reduc_freq // 2, int(self.reduc_freq / 2 * (1 - 1 / self.n_reduced)),
+                                           dtype=int) + 3 * self.n_reduced, self.reduc_freq // 2),
+                np.mod(self.linspace_float(0, self.reduc_freq // 2, int(self.reduc_freq / 2 * 1 / self.n_reduced),
+                                           dtype=int) + 3 * self.n_reduced,
+                       self.reduc_freq // 2) + self.reduc_freq // 2,
             )
-            self.loss_values = self.loss_values[indices]
-            self.avg_loss_values = self.avg_loss_values[indices]
-            self.scores = self.scores[indices]
-            self.loss_x = self.loss_x[indices]
-            self.avg_loss_x_values = self.avg_loss_x_values[indices]
-            self.score_x_values = self.score_x_values[indices]
 
-            # reset the lim to avoid early high values
-            self.ylim = (self.ylim[0], np.max(self.avg_loss_values[self.slice_freq // 50:] + 5))
+            mask = np.isin(np.arange(len(self.loss_values)), indices)
+            
+            self.loss_values = self.loss_values[mask]
+            self.avg_loss_values = self.avg_loss_values[mask]
+            self.scores = self.scores[mask]
+            self.loss_x = self.loss_x[mask]
+            self.avg_loss_x_values = self.avg_loss_x_values[mask]
+            self.score_x_values = self.score_x_values[mask]
 
         self.episode += self.update_freq
 
         # plt.pause() to update
-        self.plt.pause(0.01)
+        self.event_loop()
+
+    @staticmethod
+    def event_loop() -> None:
+        """
+        Calls plt.pause(0.001)
+        """
+        plt.pause(0.001)

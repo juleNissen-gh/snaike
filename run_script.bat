@@ -2,4 +2,4 @@
 cd %~dp0.
 call snaike_venv\Scripts\activate
 python snake_for_ai.py
-cmd \k
+:: cmd \k

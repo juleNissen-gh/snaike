@@ -7,6 +7,7 @@ import random
 import torch as pt
 from torch import nn
 from utils.per import Staticmem, PrioritizedReplayMemory
+from typing import Dict, Optional
 
 
 class Model(nn.Module):
@@ -40,13 +41,14 @@ class Model(nn.Module):
         self.output_size: int = output_size
         self.matrix_size: int = matrix_size
         self.matrix2_size: int = matrix2_size
-        self.conv_ochannels: int = 8
+        self.conv_ochannels: int = 16
         self.conv2_ochannels: int = 4
 
         self.conv: nn.Module = nn.Sequential(  # conv layers
-            nn.Conv2d(1, 32, 3),
+            nn.Conv2d(1, 64, 3),
             nn.ReLU(),
-            nn.Conv2d(32, 64, 3, padding=1),
+            nn.MaxPool2d(2),
+            nn.Conv2d(64, 64, 3, padding=1),
             nn.ReLU(),
             nn.MaxPool2d(2),
             nn.Conv2d(64, 32, 3, padding=1),
@@ -142,6 +144,30 @@ class Model(nn.Module):
         return board_matrix
 
 
+def gradfilter_ema(
+    m: nn.Module,
+    grads: Optional[Dict[str, pt.Tensor]] = None,
+    alpha: float = 0.98,
+    lamb: float = 2.0,
+) -> Dict[str, pt.Tensor]:
+    """
+    https://github.com/ironjr/grokfast/blob/main/README.md
+    :param m:
+    :param grads:
+    :param alpha:
+    :param lamb:
+    :return:
+    """
+    if grads is None:
+        grads = {n: p.grad.data.detach() for n, p in m.named_parameters() if p.requires_grad and p.grad is not None}
+
+    for n, p in m.named_parameters():
+        if p.requires_grad and p.grad is not None:
+            grads[n] = grads[n] * alpha + p.grad.data.detach() * (1 - alpha)
+            p.grad.data = p.grad.data + grads[n] * lamb
+
+    return grads
+
 def compute_q_values(batch: Staticmem, policy_net: nn.Module, target_net: nn.Module, gamma: float) -> tuple[pt.Tensor, pt.Tensor]:
     """
     Compute Q-values for a batch of experiences.
@@ -178,8 +204,9 @@ def optimize(
     optimizer: pt.optim.Optimizer,
     batch_size: int,
     gamma: float,
-    tau: float
-) -> float:
+    tau: float,
+    grok_grads: Optional[Dict[str, pt.Tensor]]
+) -> tuple[float, dict[str, pt.Tensor]]:
     """
     Perform one step of optimization on the policy network.
 
@@ -192,9 +219,11 @@ def optimize(
         batch_size (int): Number of experiences to sample for this optimization step
         gamma (float): Discount factor for future rewards
         tau (float): Soft update parameter for the target network
+        grok_grads (Optional[Dict[str, pt.Tensor]]): Latest EMA-grads for grokfast
 
     Returns:
         float: The loss value for this optimization step
+        Optional[Dict[str, pt.Tensor]]: Updated EMA-grads for grokfast
     """
     batch, indices = memory.sample(batch_size)
     computed_qvalues, expected_qvalues = compute_q_values(batch, policy_net, target_net, gamma)
@@ -204,6 +233,9 @@ def optimize(
 
     weighted_loss.backward()
     pt.nn.utils.clip_grad_value_(policy_net.parameters(), 100)
+
+    grok_grads = gradfilter_ema(policy_net, grok_grads)
+
     optimizer.step()
     optimizer.zero_grad()
 
@@ -214,4 +246,4 @@ def optimize(
     for target_param, policy_param in zip(target_net.parameters(), policy_net.parameters()):
         target_param.data.copy_(tau * policy_param.data + (1 - tau) * target_param.data)
 
-    return weighted_loss.item()
+    return weighted_loss.item(), grok_grads
