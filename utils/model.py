@@ -1,8 +1,9 @@
 """
 Defines a Model class and functions for optimizing it.
 """
-
+import gc
 import numpy as np
+import psutil
 import random
 import torch as pt
 from torch import nn
@@ -163,7 +164,7 @@ def gradfilter_ema(
 
     for n, p in m.named_parameters():
         if p.requires_grad and p.grad is not None:
-            grads[n] = grads[n] * alpha + p.grad.data.detach() * (1 - alpha)
+            grads[n].mul_(alpha).add_(p.grad.data.detach(), alpha=1-alpha)
             p.grad.data = p.grad.data + grads[n] * lamb
 
     return grads
@@ -181,20 +182,33 @@ def compute_q_values(batch: Staticmem, policy_net: nn.Module, target_net: nn.Mod
     Returns:
         tuple[torch.Tensor, torch.Tensor]: Computed Q-values and expected Q-values
     """
-    # These are the values which would've been calculated for each batch state
     state_action_values = policy_net(batch.states, batch.b_matricies)
+    next_state_values = pt.zeros_like(batch.rewards)
 
-    next_state_values = pt.zeros(batch.playing.shape)
-    # Compute V(s_{t+1}) for all next non-final states.
-    with pt.no_grad():
-        next_state_values[batch.playing] = \
-            pt.max(target_net(batch.next_states[batch.playing], batch.next_b_matricies[batch.playing]), 1)[0]
+    # Compute next state values
+    playing_mask = batch.playing
+    if playing_mask.any():
+        with pt.no_grad():
+            playing_states = batch.next_states[playing_mask]
+            playing_matrices = batch.next_b_matricies[playing_mask]
 
-    # Compute the expected Q values
-    expected_state_action_values = (next_state_values * gamma) + batch.rewards
+            target_output = target_net(playing_states, playing_matrices)
+            next_state_values[playing_mask] = target_output.max(1)[0]
+
+            # Clean up intermediate tensors
+            del playing_states, playing_matrices, target_output
+
+    # Compute expected values in-place
+    expected_state_action_values = next_state_values.mul_(gamma).add_(batch.rewards)
+
+    del next_state_values
 
     return state_action_values, expected_state_action_values
 
+def get_memory_usage():
+    process = psutil.Process()
+    memory_info = process.memory_info()
+    return memory_info.rss / 1024 / 1024  # Convert to MB
 
 def optimize(
     policy_net: nn.Module,
@@ -228,8 +242,15 @@ def optimize(
     batch, indices = memory.sample(batch_size)
     computed_qvalues, expected_qvalues = compute_q_values(batch, policy_net, target_net, gamma)
 
+    # Compute td_errors before creating computational graph for backward
+    with pt.no_grad():
+        td_errors = (computed_qvalues - expected_qvalues).abs().mean(1)
+
     loss = criterion(computed_qvalues, expected_qvalues)
     weighted_loss = (loss * batch.weights.unsqueeze(-1)).mean()
+
+    # Get the value before backward() creates computational graph
+    loss_value = weighted_loss.item()
 
     weighted_loss.backward()
     pt.nn.utils.clip_grad_value_(policy_net.parameters(), 100)
@@ -239,11 +260,14 @@ def optimize(
     optimizer.step()
     optimizer.zero_grad()
 
-    td_errors = (computed_qvalues - expected_qvalues).abs().mean(1).detach()
     memory.update_priorities(indices, td_errors)
 
     # Soft update target net
     for target_param, policy_param in zip(target_net.parameters(), policy_net.parameters()):
         target_param.data.copy_(tau * policy_param.data + (1 - tau) * target_param.data)
 
-    return weighted_loss.item(), grok_grads
+    del batch, computed_qvalues, expected_qvalues, loss, weighted_loss, td_errors
+    pt.cuda.empty_cache()
+    gc.collect()
+
+    return loss_value, grok_grads

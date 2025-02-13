@@ -24,10 +24,10 @@ Dependencies:
 - Colorama
 
 Author: Philip Nissen-Lie Trøen
-Date: 30/7/24
+Date: 1/1/25
 """
-
 import cProfile
+import tracemalloc
 import cloudpickle
 import colorama
 import numpy as np
@@ -43,12 +43,13 @@ from torch import nn
 from multiprocessing import Queue
 
 from utils.game import Environment
-from utils.graph import Graph
+from utils.live_vis import LiveVis, SeriesConfig
 from utils.model import Model, optimize
 from utils.per import PrioritizedReplayMemory, Staticmem
 from utils.play import play
 
 colorama.init()
+tracemalloc.start()
 
 device = pt.device('cuda')
 pt.set_default_device(device)
@@ -64,12 +65,15 @@ TAU = 0.03
 epsilon = 1
 EPS_END = 0
 EPS_DECAY = 0.997
-LR = 4e-4
+LR = 1e-3
+LR_SCHEDULER_STEP = 500
+LR_DECAY = 0.65
 NUM_MEMORY_ITEMS = 30_000
 BATCH_SIZE = 2000
 UPDATE_FREQUENCY = 1
 BG_PROCESSES = 1
 
+HIDDEN_SIZE = 60
 TRUNCATED_MATRIX_SIZE = 15
 Environment.TRUNCATED_MATRIX_SIZE = TRUNCATED_MATRIX_SIZE
 CONV2_TRUNCATED_MATRIX_SIZE = 9
@@ -86,7 +90,7 @@ PER_KWARGS = {
 }
 
 LOSS_AVG_LEN = 20
-SCORE_AVG_LEN = 200
+SCORE_AVG_LEN = 80
 SCORE_WEIGHT_SD = SCORE_AVG_LEN / 3
 
 BOARD_SIZE = 15
@@ -94,11 +98,10 @@ ZOOM = 40
 
 GAMMA = 0.94
 Environment.LIVING_PENALTY = -0.2
-Environment.FOOD_REWARD =15
+Environment.FOOD_REWARD = 15
 Environment.DEATH_PENALTY = -10
 Environment.WRONG_TURN_PENALTY = Environment.DEATH_PENALTY
 Environment.BORDER_PENALTY = -0.25
-
 
 speed_mod = 3
 paused = False
@@ -110,7 +113,6 @@ env_init_kwargs = {
     'truncated_matrix_size': TRUNCATED_MATRIX_SIZE
 }
 
-UP = "\x1B[8A"
 CLR = "\x1B[0K"
 
 
@@ -239,12 +241,38 @@ def main() -> None:
             traceback.print_exc()
             raise
 
-    # <editor-fold desc="vars...">
-    plot = Graph(UPDATE_FREQUENCY, SCORE_WEIGHT_SD)
+    def gaussian_smooth(values: np.ndarray, std: float) -> float:
+        """Apply Gaussian smoothing to an array of values."""
+        weights = LiveVis.gaussian_weights(len(values), std)
+        return np.average(values, weights=weights)
+
+    # <editor-fold desc="Vars and graph inits...">
+    loss_series = SeriesConfig(plot_kwargs={'label': 'Loss', 'linewidth': 0.5})
+
+    avg_loss_series = SeriesConfig(plot_kwargs={'label': 'Average Loss'},
+                                   smoothing_window_size=LOSS_AVG_LEN,
+                                   smoothing_fn=np.mean)
+
+    score_series = SeriesConfig(plot_kwargs={'label': 'Score'},
+                                axis=1,
+                                smoothing_window_size=SCORE_AVG_LEN,
+                                smoothing_fn=lambda x: gaussian_smooth(x, SCORE_WEIGHT_SD))
+
+    plot = LiveVis({
+        'loss': loss_series,
+        'avg_loss': avg_loss_series,
+        'score': score_series
+    },
+        update_freq=UPDATE_FREQUENCY,
+        twiny=True,
+        title='Training Stats',
+        x_name='Episodes',
+        y_names=('Loss', 'Score'),
+        y_scales=('log', 'linear')
+    )
+
     set_high_priority()
-    model_params = (Environment.LEN_INPUTS, 60, 4, TRUNCATED_MATRIX_SIZE, CONV2_TRUNCATED_MATRIX_SIZE)
-    average_loss = np.array([])
-    scores = np.array([], dtype=np.uint8)
+    model_params = (Environment.LEN_INPUTS, HIDDEN_SIZE, 4, TRUNCATED_MATRIX_SIZE, CONV2_TRUNCATED_MATRIX_SIZE)
     policy_net = Model(*model_params).float()
     target_net = Model(*model_params).to(device=device)
     grok_grads = None
@@ -258,6 +286,7 @@ def main() -> None:
     replay_memory = PrioritizedReplayMemory(**PER_KWARGS)
     criterion = nn.MSELoss(reduction='none')
     optimizer = pt.optim.Adam(policy_net.parameters(), lr=LR)
+    scheduler = pt.optim.lr_scheduler.StepLR(optimizer, LR_SCHEDULER_STEP, LR_DECAY)
     episode = 0
     data_q = manager.Queue()
     model_q = manager.Queue(maxsize=UPDATE_FREQUENCY + 5)
@@ -281,6 +310,9 @@ def main() -> None:
     # </editor-fold>
 
     pt.set_default_device(device)
+
+    er_saved = 0
+    er_progress = 0
 
     while True:
         membatch = data_q.get()
@@ -310,42 +342,53 @@ def main() -> None:
 
             continue
 
-        high_score = max(high_score, membatch[1])
-        scores = np.append(scores, membatch[1])
+        if er_progress > (er_progress := (er_progress + membatch[0].states.shape[0]) % NUM_MEMORY_ITEMS):
+            replay_memory.save(f'replay_memories/memory{er_saved}.pt')
+            er_saved += 1
+
+        score = membatch[1]
+        high_score = max(high_score, score)
         replay_memory.push(Staticmem(*[i.to(device=device) for i in membatch[0]]))
         del membatch
 
         epsilon = EPS_END + (epsilon - EPS_END) * EPS_DECAY
 
-        if len(scores) > SCORE_AVG_LEN:
-            scores = scores[1:]
-
         # Training loop
         if episode % UPDATE_FREQUENCY == 0:  # update every UPDATE_FREQ game
             fill_queue(policy_net, model_q)  # update simulators' models (and epsilon)
+
+            if data_q.qsize() > 100:
+                if process_dict:
+                    # Remove a non-verbose process
+                    for pid, (process, terminate_event, is_verbose) in list(process_dict.items()):
+                        if not is_verbose:
+                            terminate_process(pid, process, terminate_event)
+                            del process_dict[pid]
 
             loss, grok_grads = optimize(policy_net=policy_net, target_net=target_net, memory=replay_memory,
                                         criterion=criterion, optimizer=optimizer, batch_size=BATCH_SIZE,
                                         gamma=GAMMA, tau=TAU, grok_grads=grok_grads)
 
-            average_loss = np.append(average_loss, loss)
-
-            if len(average_loss) > LOSS_AVG_LEN:
-                average_loss = average_loss[1:]
-
-            print(f"""{UP}Episode: {episode:>8}{CLR}
-Loss: {np.mean(average_loss):>11.2f}{CLR}
+            averaged_vals = plot.update({
+                'loss': loss,
+                'avg_loss': loss,
+                'score': score
+            })
+            up = '\x1B[11A'
+            print(f"""{up}Episode: {episode:>8}{CLR}
+Loss: {averaged_vals['avg_loss']:>11.2f}{CLR}
 Epsilon: {epsilon:>8.1%}{CLR}
 High Score: {high_score:>5}{CLR}
-Avg. Score: {np.mean(scores):>5.1f}{CLR}
+Avg. Score: {averaged_vals['score']:>5.1f}{CLR}
 Dataqs: {data_q.qsize():>9}{CLR}
 Processes: {len(process_dict.items()):>6}{CLR}
-Beta: {replay_memory.beta:>11.3f}{CLR}""")
-
-            plot.update_plot(loss, average_loss, scores)
+Beta: {replay_memory.beta:>11.3f}{CLR}
+LR: {optimizer.param_groups[0]['lr']:>13.2E}{CLR}
+ER saved: {er_saved:>7}{CLR}
+Next save: {er_progress / NUM_MEMORY_ITEMS:>6.1%}{CLR}""")
 
         episode += 1
-        plot.event_loop()
+        scheduler.step()
 
 
 if __name__ == '__main__':
